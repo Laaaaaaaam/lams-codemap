@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Codemap 数据库
+.codemap/
+
+# 测试仓库（克隆的第三方项目，不纳入版本控制）
+test_repos/
+bench_repos/
+test_real/
+
+# 临时/诊断文件
+diag*.py
+exploration-report.md
+status_report.py
+analyze_unresolved.py
+
+# 旧测试目录
+test_multilang/
+test_project/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.log
