@@ -111,7 +111,7 @@ def _output_info(result: dict[str, Any]) -> None:
 
 @click.group()
 def cli() -> None:
-    """Codemap —— Python 代码网络图谱工具。"""
+    """Codemap —— 多语言代码网络图谱工具（Python/JS/TS/Go）。"""
     pass
 
 

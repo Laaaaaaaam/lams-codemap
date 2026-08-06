@@ -1,4 +1,4 @@
-"""Codemap —— Python 代码网络图谱工具。
+"""Codemap —— 多语言代码网络图谱工具（Python/JS/TS/Go）。
 
 面向 Agent 消费，提供代码网络图谱的构建与查询。
 """

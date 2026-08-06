@@ -388,30 +388,32 @@ class Querier:
             limit: 最大返回条数。
         """
         apps = self.store.get_text_search(text)
-        seen: set[tuple[str, str]] = set()
+        seen: set[str] = set()
         results: list[dict[str, str]] = []
+        total_matches = 0
         for app in apps:
-            key = (app.code, app.at)
-            if key not in seen:
-                seen.add(key)
-                # 文件过滤
-                if file_filter:
-                    file_path = app.at.split(":")[0] if ":" in app.at else ""
-                    if not file_path.startswith(file_filter):
-                        continue
-                results.append({"code": app.code, "at": app.at})
-                if len(results) >= limit:
-                    break
+            # 文件过滤
+            if file_filter:
+                file_path = app.at.split(":")[0] if ":" in app.at else ""
+                if not file_path.startswith(file_filter):
+                    continue
+            total_matches += 1
+            # 按 at（位置）去重，同一行只保留第一条匹配
+            if app.at in seen:
+                continue
+            seen.add(app.at)
+            results.append({"code": app.code, "at": app.at})
+            if len(results) >= limit:
+                break
 
-        total = len(seen)
         result: dict[str, Any] = {
             "query": text,
             "results": results,
             "match_type": "text",
         }
-        if total > limit:
+        if total_matches > limit:
             result["truncated"] = True
-            result["total"] = total
+            result["total"] = total_matches
         return result
 
     # ── file ─────────────────────────────────────────────
@@ -908,16 +910,41 @@ class Querier:
             all_field_sets = [set(d["fields"]) for d in defs if d["fields"]]
             mismatches: list[str] = []
             if len(all_field_sets) >= 2:
-                common = all_field_sets[0]
-                for fs in all_field_sets[1:]:
-                    missing = common - fs
-                    extra = fs - common
-                    if missing:
-                        idx = all_field_sets.index(fs)
-                        mismatches.append(f"{defs[idx]['file']} 缺少 {','.join(missing)}")
-                    if extra:
-                        idx = all_field_sets.index(fs)
-                        mismatches.append(f"{defs[idx]['file']} 多出 {','.join(extra)}")
+                # 大小写不敏感比较：检测"仅大小写不同"的情况
+                case_insensitive_map = {}
+                for d in defs:
+                    if not d["fields"]:
+                        continue
+                    lower_fields = {f.lower(): f for f in d["fields"]}
+                    case_insensitive_map.setdefault(d["file"], lower_fields)
+
+                # 如果所有文件的字段在大小写不敏感后完全一致 → 只是命名风格差异
+                all_lower_sets = [set(m.values()) for m in case_insensitive_map.values()]
+                lower_sets = [set(k for k in m.keys()) for m in case_insensitive_map.values()]
+                if len(set(frozenset(s) for s in lower_sets)) == 1 and len(all_lower_sets) >= 2:
+                    # 大小写不敏感后一致 → 报告命名风格差异
+                    for i in range(1, len(defs)):
+                        if not defs[i]["fields"]:
+                            continue
+                        diffs = []
+                        for f1 in defs[0]["fields"]:
+                            for f2 in defs[i]["fields"]:
+                                if f1.lower() == f2.lower() and f1 != f2:
+                                    diffs.append(f"{f1} vs {f2}")
+                        if diffs:
+                            mismatches.append(f"{defs[i]['file']} 字段大小写不一致: {', '.join(diffs)}")
+                else:
+                    # 真正的字段不一致
+                    common = all_field_sets[0]
+                    for fs in all_field_sets[1:]:
+                        missing = common - fs
+                        extra = fs - common
+                        if missing:
+                            idx = all_field_sets.index(fs)
+                            mismatches.append(f"{defs[idx]['file']} 缺少 {','.join(sorted(missing))}")
+                        if extra:
+                            idx = all_field_sets.index(fs)
+                            mismatches.append(f"{defs[idx]['file']} 多出 {','.join(sorted(extra))}")
 
             type_groups.append({
                 "name": type_name,

@@ -24,6 +24,9 @@ analyze_unresolved.py
 test_multilang/
 test_project/
 
+# sub-agent 克隆
+lams-codemap/
+
 # IDE
 .vscode/
 .idea/

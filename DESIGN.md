@@ -4,7 +4,7 @@
 
 **只建事实，不做判断。**
 
-Codemap 是一个 CLI 工具，为 Python 项目构建代码网络图谱。输出 JSON 格式，面向 Agent 消费。
+Codemap 是一个 CLI 工具，为多语言项目（Python/JavaScript/TypeScript/Go）构建代码网络图谱。输出 JSON 格式，面向 Agent 消费。
 Agent 拿到图谱后自行推理，工具不替 Agent 做任何语义判断。
 
 ## 二、核心原则
@@ -396,15 +396,24 @@ codemap trace state.buffer        # 查 state.buffer 这个链
 
 ```
 codemap/
-  __init__.py
-  cli.py           # CLI 入口（click）
-  build.py         # 构建逻辑
-  extractor.py     # AST 提取器
-  normalizer.py    # 原始事实 → 图模型
-  store.py         # SQLite 读写
-  query.py         # 查询逻辑
-  models.py        # 数据模型 (dataclass)
-  resolver.py      # 作用域解析、跨文件引用
+  __init__.py          # 公共 API 导出
+  __main__.py          # python -m codemap 入口
+  cli.py               # CLI 命令定义（click）
+  build.py             # 构建编排（全量/增量、多语言分发）
+  models.py            # 数据模型（Node/Edge/Transform，frozen dataclass）
+  store.py             # SQLite 存储层（CRUD + 查询）
+  normalizer.py        # 原始事实去重、补全
+  resolver.py          # 跨文件引用解析、param-flow 边创建
+  query.py             # 查询逻辑（trace/info/at/search/file/dead/impact/api/cycles/types）
+  extractor.py         # 向后兼容 shim → extractors/python.py
+  extractors/
+    __init__.py         # 多语言提取器分发中心
+    base.py             # BaseExtractor 协议
+    python.py           # Python 提取器（基于 ast 模块）
+    javascript.py       # JavaScript 提取器（基于 tree-sitter）
+    typescript.py       # TypeScript 提取器（继承 JS，增加类型注解）
+    go.py               # Go 提取器（基于 tree-sitter）
+    treesitter_utils.py # tree-sitter 通用工具
 ```
 
 ## 九、版本记录
