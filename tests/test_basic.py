@@ -315,3 +315,21 @@ class TestPublicAPI:
             # lonely 无任何引用且模块未被 import → high 死代码
             lonely = [s for s in result["dead_symbols"] if s["symbol"] == "lonely"]
             assert lonely and lonely[0]["confidence"] == "high"
+
+    def test_go_same_package_resolution(self, tmp_path):
+        """Go 同包跨文件函数解析（gin.go 与 *_test.go 同包）。"""
+        (tmp_path / "server.go").write_text(
+            'package main\n\nfunc New() *Server {\n\treturn &Server{}\n}\n'
+        )
+        (tmp_path / "server_test.go").write_text(
+            'package main\n\nfunc TestNew() {\n\t_ = New()\n}\n'
+        )
+        build(str(tmp_path), full=True)
+        store = Store(os.path.join(str(tmp_path), ".codemap", "codemap.db"))
+        with store:
+            # New 的调用应解析到 server.go#New（同包跨文件）
+            rows = store.conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE edge_type='calls' AND to_node=?",
+                ("server.go#New",),
+            ).fetchone()[0]
+            assert rows >= 1

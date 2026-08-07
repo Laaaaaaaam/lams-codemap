@@ -23,6 +23,7 @@ class Resolver:
 
     def __init__(self, store: Any) -> None:  # Store
         self.store = store
+        self._module_method_cache: dict[tuple[str, str], str | None] = {}
 
     def resolve(self) -> None:
         """执行所有跨文件解析。"""
@@ -379,13 +380,17 @@ class Resolver:
         JS: utils.shouldHaveBody → module_path='./support/utils' → test/support/utils.js#shouldHaveBody
         适用于 var utils = require('./support/utils'); utils.shouldHaveBody(...) 模式。
 
-        Args:
-            module_path: import 边中的模块路径（如 ./support/utils、./application）
-            method_name: 要查找的方法名（如 shouldHaveBody）
-
-        Returns:
-            目标节点 ID，找不到返回 None
+        带缓存：同一 (module, method) 只查询一次，避免大量 external 调用重复扫描。
         """
+        cache_key = (module_path, method_name)
+        if cache_key in self._module_method_cache:
+            return self._module_method_cache[cache_key]
+
+        result = self._resolve_method_in_module_uncached(module_path, method_name)
+        self._module_method_cache[cache_key] = result
+        return result
+
+    def _resolve_method_in_module_uncached(self, module_path: str, method_name: str) -> str | None:
         # 将模块路径转成候选文件路径
         # ./support/utils → support/utils.js / support/utils/index.js
         clean = module_path.lstrip("./")
@@ -489,12 +494,28 @@ class Resolver:
         return None
 
     def _find_real_node_in_file(self, name: str, file_path: str) -> str | None:
-        """在指定文件中查找指定名称的 Function 节点。"""
+        """在指定文件中查找指定名称的 Function 节点。
+
+        先查同文件，找不到时回退到同目录（Go 同目录通常同包）。
+        """
         rows = self.store.conn.execute(
             "SELECT id FROM nodes WHERE name = ? AND kind IN ('Function', 'Class') AND id LIKE ?",
             (name, f"{file_path}#%"),
         ).fetchall()
-        return rows[0]["id"] if rows else None
+        if rows:
+            return rows[0]["id"]
+        # Go 同包回退：同目录的其他文件（如 gin.go 与 gin_test.go 同包）
+        # 先按 name 索引查询，再在 Python 中过滤同目录，避免 LIKE 前缀扫描
+        if file_path.endswith(".go"):
+            dir_part = file_path.rsplit("/", 1)[0] + "/" if "/" in file_path else ""
+            rows = self.store.conn.execute(
+                "SELECT id FROM nodes WHERE name = ? AND kind IN ('Function', 'Class') LIMIT 50",
+                (name,),
+            ).fetchall()
+            for r in rows:
+                if r["id"].startswith(dir_part) and r["id"] != file_path + "#":
+                    return r["id"]
+        return None
 
     def _find_node_in_module(self, ext_id: str, name: str) -> str | None:
         """在 external 模块对应代码仓库的文件中查找子符号。
