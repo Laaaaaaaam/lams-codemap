@@ -297,15 +297,16 @@ def dead(scope: str | None, as_json: bool) -> None:
 @cli.command()
 @click.argument("target")
 @click.option("--scope", default=None, help="限定作用域，用于消歧")
+@click.option("--depth", default=3, type=int, help="传递影响最大深度（默认 3）")
 @click.option("--json", "as_json", is_flag=True, help="JSON 输出")
-def impact(target: str, scope: str | None, as_json: bool) -> None:
+def impact(target: str, scope: str | None, depth: int, as_json: bool) -> None:
     """查看改动影响面。
 
     TARGET: 符号名或 file:line 位置。
     """
     store = _get_store()
     querier = Querier(store)
-    result = querier.impact(target, scope=scope)
+    result = querier.impact(target, scope=scope, depth=depth)
     if as_json:
         _output_json(result)
     else:
@@ -410,6 +411,32 @@ def types(name: str | None, as_json: bool) -> None:
                     click.echo(f"    [{d['language']}] {d['file']}:{d['line']} | fields: {', '.join(d.get('fields', []))}")
                 if g.get("mismatches"):
                     click.echo(f"    不一致: {', '.join(g['mismatches'])}")
+
+
+@cli.command()
+@click.argument("fmt", type=click.Choice(["graphml", "dot"]))
+@click.option("-o", "--output", "output", type=click.Path(), default=None, help="输出文件路径（默认 stdout）")
+@click.option("--include-external", is_flag=True, help="包含 External 占位符节点")
+def export(fmt: str, output: str | None, include_external: bool) -> None:
+    """导出图谱为 GraphML 或 DOT 格式（用于可视化）。
+
+    FMT: graphml（Gephi/yEd）或 dot（Graphviz）。
+    """
+    from codemap.export import export as do_export
+
+    store = _get_store()
+    try:
+        result = do_export(store, fmt, include_external=include_external)
+    except ValueError as e:
+        click.echo(f"错误: {e}", err=True)
+        sys.exit(1)
+
+    if output:
+        with open(output, "w", encoding="utf-8") as f:
+            f.write(result)
+        click.echo(f"已导出到 {output}")
+    else:
+        click.echo(result)
 
 
 if __name__ == "__main__":

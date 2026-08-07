@@ -422,6 +422,8 @@ codemap/
 - v0.2: 多语言支持（Python + JavaScript + TypeScript + Go），基于 tree-sitter
 - v0.3: 多语言调用解析（Go receiver 方法、JS obj.method 调用）、接口感知死代码检测
 - v0.4: 新增 api/cycles/types 命令、TypeAlias 节点类型、入口点白名单、search 过滤分页、CommonJS exports 调用边
+- v0.5: Python 库公开 API 识别（__all__/模块命名空间可达性）、模块级调用提取、import 别名、类型注解引用
+- v0.5.1: Go 同包跨文件函数解析、resolver 性能优化（缓存）、死代码 high 误报清零
 
 ## 十、新增命令（v0.4）
 

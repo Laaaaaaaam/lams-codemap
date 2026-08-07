@@ -563,7 +563,7 @@ class Querier:
 
     # ── impact ───────────────────────────────────────────
 
-    def impact(self, target: str, scope: str | None = None) -> dict[str, Any]:
+    def impact(self, target: str, scope: str | None = None, depth: int = 3) -> dict[str, Any]:
         """影响面查询，输出分层。
 
         target 可以是:
@@ -573,6 +573,7 @@ class Querier:
         Args:
             target: 符号名或 file:line 位置。
             scope: 限定作用域，用于消歧。
+            depth: 传递影响的最大深度（默认 3，含直接调用层）。
 
         输出分层：
           - direct_callers: 反向1跳，谁直接调用/引用了我
@@ -639,8 +640,8 @@ class Querier:
         for lid in current_layer:
             visited.add(lid)
 
-        depth = 2
-        while current_layer and depth <= 3:
+        depth_counter = 2
+        while current_layer and depth_counter <= depth:
             next_layer: set[str] = set()
             for sid in current_layer:
                 if sid.startswith("#external:"):
@@ -670,7 +671,7 @@ class Querier:
                         next_layer.add(e["from_node"])
 
             current_layer = next_layer
-            depth += 1
+            depth_counter += 1
 
         return {
             "target": target,

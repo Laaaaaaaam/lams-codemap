@@ -94,10 +94,10 @@ codemap/
 
 | 仓库 | 语言 | 文件 | 节点 | 边 | 调用解析率 |
 |---|---|---|---|---|---|
-| test_multiservice | Py+Go+JS+TS | 7 | 289 | 546 | 24% |
-| requests | Python | 37 | 4,809 | 11,270 | 48% |
-| express | JavaScript | 141 | 1,584 | 13,731 | 50% |
-| gin | Go | 99 | 5,610 | 22,067 | 36% |
+| test_multiservice | Py+Go+JS+TS | 7 | 292 | 582 | 23% |
+| requests | Python | 37 | 5,002 | 12,332 | 49% |
+| express | JavaScript | 141 | 1,580 | 27,580 | 51% |
+| gin | Go | 99 | 5,610 | 22,067 | 49% |
 
 > 调用解析率未达 100% 是理论正常的——语言内置函数、标准库、第三方依赖和动态分发在静态分析中不可解析。
 
@@ -113,14 +113,14 @@ codemap/
 
 ```bash
 python -m pytest tests/test_basic.py -v
-# 34 passed in 0.92s
+# 38 passed in 1.28s
 ```
 
-覆盖：模型、提取器（Python/JS/Go）、构建、查询、解析器。
+覆盖：模型、提取器（Python/JS/Go）、构建、查询、解析器、公开 API 识别、Go 同包解析。
 
 ## 版本
 
-v0.4.0 — 详见 [DESIGN.md](DESIGN.md) 版本记录。
+v0.5.1 — 详见 [DESIGN.md](DESIGN.md) 版本记录。
 
 ## 许可证
 
