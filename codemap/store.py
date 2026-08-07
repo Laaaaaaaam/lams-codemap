@@ -515,6 +515,10 @@ class Store:
                 # Go: 首字母大写 = 导出符号（公开 API），可能被外部调用
                 confidence = "medium"
                 reason = "零入边（Go 导出符号，可能是公开 API 被外部调用）"
+            elif file_path.endswith(".py") and self._module_is_imported(file_path):
+                # Python: 模块被其他文件 import → 模块内顶层符号是命名空间公开 API
+                confidence = "medium"
+                reason = "零入边（所在模块被外部 import，可能是命名空间公开 API）"
             else:
                 confidence = "high"
                 reason = "零入边（无任何调用/引用/导入）"
@@ -531,6 +535,42 @@ class Store:
             })
 
         return result
+
+    def _module_is_imported(self, file_path: str) -> bool:
+        """检查 Python 模块是否被其他文件 import。
+
+        如果模块被 import，其顶层符号可以通过模块命名空间（module.xxx）被外部访问，
+        属于"命名空间公开 API"，不应判定为 high 置信度死代码。
+        """
+        # 该文件自身的 File 节点 id（如 utils.py#）
+        file_node_id = f"{file_path}#"
+        # 查找指向该文件的 imports 边（from_node 是其他文件）
+        rows = self.conn.execute(
+            """
+            SELECT 1 FROM edges
+            WHERE edge_type = 'imports'
+              AND to_node LIKE ?
+              AND from_node != ?
+            LIMIT 1
+            """,
+            (f"%{file_path}", file_node_id),
+        ).fetchall()
+        if rows:
+            return True
+        # 也检查 from_node 是其他文件的模块级 import（to_node 是 #external:module.symbol）
+        # 如 from .utils import foo → import 边 to_node 是 #external:utils.foo
+        base_name = file_path.rsplit("/", 1)[-1].replace(".py", "")
+        rows = self.conn.execute(
+            """
+            SELECT 1 FROM edges
+            WHERE edge_type = 'imports'
+              AND to_node LIKE ?
+              AND from_node != ?
+            LIMIT 1
+            """,
+            (f"#external:{base_name}.%", file_node_id),
+        ).fetchall()
+        return bool(rows)
 
     def get_text_search(self, pattern: str) -> list[Appearance]:
         """全文搜索：同时搜 edges 的 code 字段和 nodes 的 name 字段。"""

@@ -209,15 +209,22 @@ class Resolver:
         if owner_var_id:
             owner_node = self.store.get_node(owner_var_id)
             if owner_node and owner_node["kind"] == "Variable":
-                # 检查是否有 import 边
+                # 检查是否有 import 边（JS: var utils = require('./support/utils')）
+                # import 边的 to_node 是 #external:./support/utils（模块路径，非别名）
                 file_node_id = from_file + "#"
                 import_edges = self.store.conn.execute(
-                    "SELECT to_node FROM edges WHERE edge_type='imports' AND from_node=? AND to_node LIKE ?",
-                    (file_node_id, f"#external:%{owner_name}"),
+                    "SELECT to_node FROM edges WHERE edge_type='imports' AND from_node=?",
+                    (file_node_id,),
                 ).fetchall()
-                if import_edges:
-                    # 这是 import 别名，走原有 import 解析
-                    return self._resolve_import_call(edge, func_name)
+                for imp in import_edges:
+                    imp_to = imp["to_node"]
+                    # 尝试从 import 模块解析 method（utils.shouldHaveBody → 模块内 shouldHaveBody）
+                    if imp_to.startswith("#external:"):
+                        module_path = imp_to[len("#external:"):]
+                        # 从模块路径找到对应文件（如 ./support/utils → test/support/utils.js）
+                        target = self._resolve_method_in_module(module_path, method_name)
+                        if target:
+                            return target
 
         # 策略 4: owner 是参数/局部变量 → 查找所有 Class 的同名方法
         # 检查 owner 是否是当前文件的某个函数的参数
@@ -357,6 +364,72 @@ class Resolver:
                     else:
                         return r["id"]
 
+            # JS 解构导入：var x = require('./mod').x 只记录模块级 import（#external:./mod）
+            # 用模块路径 + var_name 在模块文件中查找
+            if ext_name.startswith("./") or ext_name.startswith("../"):
+                target = self._resolve_method_in_module(ext_name, var_name)
+                if target:
+                    return target
+
+        return None
+
+    def _resolve_method_in_module(self, module_path: str, method_name: str) -> str | None:
+        """从模块路径解析方法调用目标。
+
+        JS: utils.shouldHaveBody → module_path='./support/utils' → test/support/utils.js#shouldHaveBody
+        适用于 var utils = require('./support/utils'); utils.shouldHaveBody(...) 模式。
+
+        Args:
+            module_path: import 边中的模块路径（如 ./support/utils、./application）
+            method_name: 要查找的方法名（如 shouldHaveBody）
+
+        Returns:
+            目标节点 ID，找不到返回 None
+        """
+        # 将模块路径转成候选文件路径
+        # ./support/utils → support/utils.js / support/utils/index.js
+        clean = module_path.lstrip("./")
+        # 相对路径：从 from_file 目录推导（调用方已传 module_path，这里做全局模糊匹配）
+        candidates = [
+            clean + ".js",
+            clean + ".ts",
+            clean + ".go",
+            clean + ".py",
+            clean + "/index.js",
+            clean + "/index.ts",
+        ]
+        for cand in candidates:
+            # 在 nodes 表中查找文件节点（以文件路径开头的 Function）
+            rows = self.store.conn.execute(
+                "SELECT id FROM nodes WHERE id LIKE ? AND name = ? AND kind = 'Function'",
+                (f"%{cand}#%", method_name),
+            ).fetchall()
+            if rows:
+                return rows[0]["id"]
+
+        # 备选：按文件名末段模糊匹配
+        # ./support/utils → 匹配任意以 utils.js 结尾的文件
+        last_seg = clean.rsplit("/", 1)[-1]
+        rows = self.store.conn.execute(
+            "SELECT id FROM nodes WHERE id LIKE ? AND name = ? AND kind = 'Function' LIMIT 5",
+            (f"%{last_seg}.js#%", method_name),
+        ).fetchall()
+        if rows:
+            return rows[0]["id"]
+        rows = self.store.conn.execute(
+            "SELECT id FROM nodes WHERE id LIKE ? AND name = ? AND kind = 'Function' LIMIT 5",
+            (f"%{last_seg}.ts#%", method_name),
+        ).fetchall()
+        if rows:
+            return rows[0]["id"]
+        # 更宽松：模块路径的完整路径匹配（含相对目录前缀）
+        # ./support/utils → 匹配 test/support/utils.js（相对 test/ 目录解析）
+        rows = self.store.conn.execute(
+            "SELECT id FROM nodes WHERE id LIKE ? AND name = ? AND kind = 'Function' LIMIT 5",
+            (f"%{clean}#%", method_name),
+        ).fetchall()
+        if rows:
+            return rows[0]["id"]
         return None
 
     def _resolve_import_call(self, edge: dict[str, Any], func_name: str) -> str | None:

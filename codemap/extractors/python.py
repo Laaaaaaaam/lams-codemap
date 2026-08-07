@@ -295,6 +295,14 @@ class PythonExtractor:
                     inputs = self._expr_inputs(stmt.value)
                     if inputs or isinstance(stmt.value, ast.Call):
                         self._handle_rhs_transform(stmt.value, stmt, inputs, outputs)
+                # __all__ 识别：模块级 __all__ = (...) 中的符号是公开 API
+                for target in stmt.targets:
+                    for var_name in self._extract_names(target):
+                        if var_name == "__all__":
+                            self._record_all_export(stmt.value)
+            else:
+                # 其他模块级语句（Try/Expr/Call/If 等）也要记录调用边
+                self._visit_stmt(stmt, ())
 
         # 第三 pass: 展开函数/类体（此时所有顶层符号已就绪）
         for func_stmt, scope in func_stmts:
@@ -329,7 +337,13 @@ class PythonExtractor:
             ann = ""
             if arg.annotation:
                 ann = _get_source_segment(self.source, arg.annotation)
+                # 类型注解引用：_t.RequestKwargs / Unpack[...] → 记录对类型名的引用
+                self._visit_annotation(arg.annotation, func_scope)
             self._add_node(arg.arg, "Variable", func_scope, arg, type_annotation=ann, is_param=1)
+
+        # 返回类型注解引用
+        if node.returns:
+            self._visit_annotation(node.returns, func_scope)
 
         # 装饰器 → decorator reads + decorates 边
         for dec in node.decorator_list:
@@ -488,6 +502,10 @@ class PythonExtractor:
                 self._add_node(var_name, "Variable", scope, target)
                 self._add_edge("assigns", scope_id, var_id, stmt)
 
+                # __all__ 识别：模块级 __all__ = (...) 中的符号是公开 API
+                if var_name == "__all__" and not scope:
+                    self._record_all_export(stmt.value)
+
             # Transform: 如果有多个输出（解包）或 RHS 是 call/运算
             outputs = [self._node_id(*scope, n) for n in self._extract_names(target)]
             if len(outputs) > 1 or isinstance(stmt.value, (ast.Call, ast.BinOp, ast.UnaryOp)):
@@ -499,6 +517,22 @@ class PythonExtractor:
                     owner_id = self._resolve_name(attr_chain[0], scope)
                     if owner_id:
                         self._add_edge("writes", scope_id, owner_id, stmt)
+
+    def _record_all_export(self, value: ast.expr) -> None:
+        """记录 __all__ 中声明的公开 API 符号。
+
+        __all__ = ("Foo", "bar", ...) → 为 Foo/bar 建立 reads 边（公开 API 引用）。
+        """
+        if not isinstance(value, (ast.Tuple, ast.List, ast.Set)):
+            return
+        scope_id = self._node_id()
+        for elt in value.elts:
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                symbol = elt.value
+                # 尝试解析符号为已定义节点（模块级）
+                var_id = self._resolve_name(symbol, ())
+                if var_id:
+                    self._add_edge("reads", scope_id, var_id, elt)
 
     def _handle_rhs_transform(
         self,
@@ -542,6 +576,64 @@ class PythonExtractor:
             self._add_node(stmt.target.id, "Variable", scope, stmt.target)
             self._add_edge("assigns", scope_id, var_id, stmt)
 
+    def _visit_annotation(self, ann: ast.expr, scope: tuple[str, ...]) -> None:
+        """提取类型注解中的符号引用（如 _t.RequestKwargs、Unpack[...]、list[str]）。
+
+        在函数签名、参数注解、返回注解中被引用但未作为运行时调用出现的类型，
+        也应建立 reads 边，避免被误判为死代码。
+        """
+        scope_id = self._node_id(*scope)
+
+        # 提取注解中的 Name 节点（_t.RequestKwargs → RequestKwargs 和 _t 两段）
+        for sub in ast.walk(ann):
+            if isinstance(sub, ast.Name):
+                # 注解中的裸名（RequestKwargs、Unpack、list 等）
+                var_id = self._resolve_name(sub.id, scope)
+                if not var_id:
+                    var_id = self._resolve_name(sub.id, ())
+                if var_id:
+                    self._add_edge("reads", scope_id, var_id, sub)
+            elif isinstance(sub, ast.Attribute):
+                # 属性链（_t.RequestKwargs）→ 提取最后一段符号名
+                chain = self._extract_attr_chain(sub)
+                if chain:
+                    last = chain[-1]
+                    var_id = self._resolve_name(last, scope)
+                    if not var_id:
+                        var_id = self._resolve_name(last, ())
+                    if var_id:
+                        self._add_edge("reads", scope_id, var_id, sub)
+                    else:
+                        # 模块别名.符号（_t.RequestKwargs）：解析模块别名指向的真实模块
+                        # _t 是 import requests._types as _t 的别名 → #external:_types.RequestKwargs
+                        owner = chain[0]
+                        owner_id = self._resolve_name(owner, scope)
+                        if owner_id:
+                            # 查找 owner 的 import 边（模块别名），匹配 ext_name 与 owner
+                            # 如 import requests._types as _t：ext_name 可能是 _types 或 requests._types
+                            file_id = self._node_id()
+                            imp_edges = [e for e in self.edges
+                                         if e.edge_type == "imports" and e.from_node == file_id]
+                            for imp in imp_edges:
+                                ext_target = imp.to_node
+                                if ext_target.startswith("#external:"):
+                                    ext_name = ext_target[len("#external:"):]
+                                    ext_last = ext_name.rsplit(".", 1)[-1]
+                                    # 匹配：ext 末段 == owner（_types._t 前缀相似）或 owner 是 ext 的子串
+                                    if ext_last == owner or ext_name == owner or owner.startswith(ext_last) or ext_last.startswith(owner):
+                                        module_symbol = f"{ext_name}.{last}"
+                                        ext_id = f"#external:{module_symbol}"
+                                        ext_node = Node(
+                                            id=ext_id,
+                                            kind="External",
+                                            name=module_symbol,
+                                            location=_loc(self.file, sub),
+                                            scope="",
+                                        )
+                                        self.nodes.append(ext_node)
+                                        self._add_edge("imports", file_id, ext_id, sub)
+                                        break
+
     def _visit_aug_assign(self, stmt: ast.AugAssign, scope: tuple[str, ...]) -> None:
         scope_id = self._node_id(*scope)
         self._visit_expr(stmt.target, scope)
@@ -576,12 +668,14 @@ class PythonExtractor:
         file_id = self._node_id()
         module = stmt.module or ""
         for alias in stmt.names:
-            name = alias.asname or alias.name
-            full_name = f"{module}.{name}" if module else name
+            # ext_id 用原始名（alias.name），本地变量用别名（asname 或原名）
+            original_name = alias.name
+            local_name = alias.asname or alias.name
+            full_name = f"{module}.{original_name}" if module else original_name
             if module:
-                ext_id = f"#external:{module}.{name}"
+                ext_id = f"#external:{module}.{original_name}"
             else:
-                ext_id = f"#external:{name}"
+                ext_id = f"#external:{original_name}"
             ext_node = Node(
                 id=ext_id,
                 kind="External",
@@ -593,7 +687,6 @@ class PythonExtractor:
             self._add_edge("imports", file_id, ext_id, stmt)
 
             # 本地符号
-            local_name = alias.asname or alias.name
             local_id = self._node_id(*scope, local_name)
             self._add_node(local_name, "Variable", scope, stmt)
             self._add_edge("assigns", file_id, local_id, stmt)

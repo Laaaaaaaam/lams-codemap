@@ -524,6 +524,12 @@ class JavaScriptExtractor:
         if t == "identifier":
             var_name = ts_node_text(node)
             var_id = self._resolve_name(var_name, scope)
+            if not var_id:
+                # 前向引用：定义可能在后面，先查文件级 scope
+                var_id = self._resolve_name(var_name, ())
+            if not var_id:
+                # 前向引用：节点尚未创建，用文件级 node_id 占位
+                var_id = self._node_id(var_name)
             if var_id:
                 self._add_edge("reads", scope_id, var_id, node)
 
@@ -806,8 +812,10 @@ class JavaScriptExtractor:
             self._visit_expression(index, scope, file_id)
 
         elif t == "await_expression":
-            arg = node.child_by_field_name("value")
-            self._visit_expression(arg, scope, file_id)
+            # await 表达式的子节点是位置子节点（无命名字段）
+            for child in node.children:
+                if child.is_named and child.type != "await":
+                    self._visit_expression(child, scope, file_id)
 
         elif t == "sequence_expression":
             for child in node.children:
@@ -834,6 +842,9 @@ class JavaScriptExtractor:
                 obj_name = ts_node_text(obj) if obj.type == "identifier" else self._extract_callable_name(obj)
                 prop_name = ts_node_text(prop)
                 if obj_name:
+                    # .bind() / .call() / .apply() → 返回原始函数名（间接引用）
+                    if prop_name in ("bind", "call", "apply"):
+                        return obj_name
                     return f"{obj_name}.{prop_name}"
         return None
 

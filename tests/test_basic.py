@@ -263,3 +263,55 @@ class TestQuery:
     def test_derive_role_reference(self):
         q = Querier.__new__(Querier)
         assert q._derive_role("bar = 1") == "reference"
+
+
+# ── 公开 API 识别测试 ──────────────────────────────────
+
+class TestPublicAPI:
+    def test_all_export_reads(self, tmp_path):
+        """__all__ 中的符号建立 reads 边。"""
+        (tmp_path / "mymod.py").write_text(
+            'def foo():\n    pass\n\n'
+            'def bar():\n    pass\n\n'
+            '__all__ = ("foo", "bar")\n'
+        )
+        build(str(tmp_path), full=True)
+        store = Store(os.path.join(str(tmp_path), ".codemap", "codemap.db"))
+        with store:
+            # foo 应该有 reads 边（来自 __all__）
+            rows = store.conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE edge_type='reads' AND to_node=?", ("mymod.py#foo",)
+            ).fetchone()[0]
+            assert rows >= 1
+
+    def test_module_imported_medium(self, tmp_path):
+        """模块被 import → 其顶层符号判为 medium 而非 high。"""
+        (tmp_path / "utils.py").write_text(
+            'def helper():\n    return 1\n'
+        )
+        (tmp_path / "main.py").write_text(
+            'from .utils import helper\n'
+            'print(helper())\n'
+        )
+        build(str(tmp_path), full=True)
+        store = Store(os.path.join(str(tmp_path), ".codemap", "codemap.db"))
+        with store:
+            q = Querier(store)
+            result = q.dead()
+            # helper 被 main.py import 使用，不应出现在死代码中
+            dead_scopes = {s["scope"] for s in result["dead_symbols"]}
+            assert "utils.py" not in dead_scopes
+
+    def test_unimported_module_high(self, tmp_path):
+        """模块未被 import → 其顶层符号判为 high。"""
+        (tmp_path / "solo.py").write_text(
+            'def lonely():\n    return 1\n'
+        )
+        build(str(tmp_path), full=True)
+        store = Store(os.path.join(str(tmp_path), ".codemap", "codemap.db"))
+        with store:
+            q = Querier(store)
+            result = q.dead()
+            # lonely 无任何引用且模块未被 import → high 死代码
+            lonely = [s for s in result["dead_symbols"] if s["symbol"] == "lonely"]
+            assert lonely and lonely[0]["confidence"] == "high"
