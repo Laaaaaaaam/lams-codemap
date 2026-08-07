@@ -30,7 +30,7 @@ from codemap.resolver import Resolver
 from codemap.build import build
 from codemap.query import Querier
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     "Node",
     "Edge",
